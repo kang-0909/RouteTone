@@ -21,8 +21,16 @@ final class AudioPriorityModel: ObservableObject {
 
     init() {
         ApplicationDelegate.sharedModel = self
+        let appliedInitialDefaults = settingsStore.applyInitialDefaultsIfNeeded()
         if settingsStore.settings.useLiquidGlass {
             settingsStore.updateLiquidGlassEnabled(false)
+        }
+        if appliedInitialDefaults && settingsStore.settings.launchAtLogin {
+            do {
+                try LaunchAtLoginManager.setEnabled(true)
+            } catch {
+                lastError = error.localizedDescription
+            }
         }
 
         hardwareMonitor.start { [weak self] in
@@ -158,6 +166,12 @@ final class AudioPriorityModel: ObservableObject {
         scheduleRefresh(reason: "priority reorder", delayMilliseconds: 50)
     }
 
+    func replacePriorityOrder(with orderedUIDs: [String], direction: AudioDirection) {
+        settingsStore.replacePriorityOrder(with: orderedUIDs, direction: direction)
+        statusMessage = "\(direction.title) priority updated."
+        scheduleRefresh(reason: "priority reorder", delayMilliseconds: 50)
+    }
+
     func moveDevice(uid: String, before targetUID: String, direction: AudioDirection) {
         settingsStore.move(uid, before: targetUID, direction: direction)
         statusMessage = "\(direction.title) priority updated."
@@ -180,6 +194,12 @@ final class AudioPriorityModel: ObservableObject {
         settingsStore.setEnabled(enabled, uid: uid, direction: direction)
         statusMessage = enabled ? "Device enabled for \(direction.title.lowercased())." : "Device disabled for \(direction.title.lowercased())."
         scheduleRefresh(reason: "priority enable toggle", delayMilliseconds: 50)
+    }
+
+    func removeDevice(uid: String, direction: AudioDirection) {
+        settingsStore.removeDevice(uid: uid, direction: direction)
+        statusMessage = "Removed device from \(direction.title.lowercased()) priority."
+        scheduleRefresh(reason: "priority remove", delayMilliseconds: 50)
     }
 
     func openSoundSettings(for direction: AudioDirection? = nil) {

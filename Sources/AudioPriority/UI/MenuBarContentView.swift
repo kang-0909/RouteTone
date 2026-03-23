@@ -22,7 +22,7 @@ struct MenuBarContentView: View {
         panelContent(useLiquidGlass: false)
             .padding(16)
             .frame(width: 304)
-            .background(MenuPanelWindowConfigurator(clearBackground: false))
+            .background(MenuPanelWindowConfigurator(clearBackground: true))
             .modifier(MenuPanelBackgroundModifier(useLiquidGlass: false))
     }
 

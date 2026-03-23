@@ -39,6 +39,14 @@ final class SettingsStore {
         save()
     }
 
+    func applyInitialDefaultsIfNeeded() -> Bool {
+        guard !settings.hasCompletedInitialSetup else { return false }
+        settings.hasCompletedInitialSetup = true
+        settings.launchAtLogin = true
+        save()
+        return true
+    }
+
     func mergeDiscoveredDevices(_ devices: [AudioDeviceSnapshot]) {
         let shouldBootstrapInputPriority = settings.inputPriority.isEmpty
         let shouldBootstrapOutputPriority = settings.outputPriority.isEmpty
@@ -149,6 +157,23 @@ final class SettingsStore {
         save()
     }
 
+    func replacePriorityOrder(with orderedUIDs: [String], direction: AudioDirection) {
+        let existingEntries = priorityEntries(for: direction)
+        let existingByUID = Dictionary(uniqueKeysWithValues: existingEntries.map { ($0.deviceUID, $0) })
+
+        var reorderedEntries: [PriorityEntry] = orderedUIDs.compactMap { uid in
+            existingByUID[uid]
+        }
+
+        let remainingEntries = existingEntries.filter { entry in
+            !orderedUIDs.contains(entry.deviceUID)
+        }
+        reorderedEntries.append(contentsOf: remainingEntries)
+
+        setPriorityEntries(reorderedEntries, for: direction)
+        save()
+    }
+
     func move(_ uid: String, to destinationIndex: Int, direction: AudioDirection) {
         var entries = priorityEntries(for: direction)
         guard let currentIndex = entries.firstIndex(where: { $0.deviceUID == uid }) else { return }
@@ -203,6 +228,16 @@ final class SettingsStore {
         guard let index = entries.firstIndex(where: { $0.deviceUID == uid }) else { return }
         entries[index].isEnabled = enabled
         setPriorityEntries(entries, for: direction)
+        save()
+    }
+
+    func removeDevice(uid: String, direction: AudioDirection) {
+        switch direction {
+        case .input:
+            settings.inputPriority.removeAll { $0.deviceUID == uid }
+        case .output:
+            settings.outputPriority.removeAll { $0.deviceUID == uid }
+        }
         save()
     }
 
@@ -295,7 +330,7 @@ final class SettingsStore {
 
     private static func loadSettings(from url: URL) throws -> AppSettings {
         let data = try Data(contentsOf: url)
-        return try JSONDecoder().decode(AppSettings.self, from: data)
+        return try JSONDecoder(iso8601: true).decode(AppSettings.self, from: data)
     }
 }
 

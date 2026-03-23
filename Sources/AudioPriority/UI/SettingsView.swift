@@ -302,10 +302,13 @@ private struct PriorityTableView: NSViewRepresentable {
             guard let draggedUID = info.draggingPasteboard.string(forType: pasteboardType) else { return false }
             guard let sourceIndex = items.firstIndex(where: { $0.id == draggedUID }) else { return false }
 
-            let destinationIndex = row > sourceIndex ? row - 1 : row
-            guard destinationIndex != sourceIndex else { return false }
+            var reorderedUIDs = items.map(\.id)
+            let destinationIndex = min(max(row, 0), reorderedUIDs.count)
+            reorderedUIDs.move(fromOffsets: IndexSet(integer: sourceIndex), toOffset: destinationIndex)
 
-            model.moveDevice(uid: draggedUID, to: destinationIndex, direction: direction)
+            guard reorderedUIDs != items.map(\.id) else { return false }
+
+            model.replacePriorityOrder(with: reorderedUIDs, direction: direction)
             return true
         }
     }
@@ -357,6 +360,17 @@ private struct RankedDeviceRow: View {
                 .buttonStyle(.bordered)
                 .controlSize(.mini)
                 .help("Move to top")
+
+                Button(role: .destructive) {
+                    model.removeDevice(uid: item.record.uid, direction: item.direction)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .frame(width: 10, height: 10)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("Remove from this list")
 
                 Toggle("", isOn: Binding(
                     get: { item.isEnabled },
