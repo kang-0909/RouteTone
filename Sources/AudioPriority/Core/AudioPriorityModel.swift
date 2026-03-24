@@ -18,6 +18,12 @@ final class AudioPriorityModel: ObservableObject {
     private let settingsStore = SettingsStore()
     private let hardwareMonitor = AudioHardwareMonitor()
     private var refreshTask: Task<Void, Never>?
+    private var pendingDeviceListChange = false
+    private var pendingDefaultDeviceChange = false
+    private var manualInputOverrideUID: String?
+    private var manualOutputOverrideUID: String?
+    private var lastAppliedInputUID: String?
+    private var lastAppliedOutputUID: String?
 
     init() {
         ApplicationDelegate.sharedModel = self
@@ -33,9 +39,14 @@ final class AudioPriorityModel: ObservableObject {
             }
         }
 
-        hardwareMonitor.start { [weak self] in
+        hardwareMonitor.start { [weak self] changeKind in
             Task { @MainActor in
-                self?.scheduleRefresh(reason: "hardware change")
+                switch changeKind {
+                case .deviceList:
+                    self?.scheduleRefresh(reason: "hardware change", sawDeviceListChange: true)
+                case .defaultDevice:
+                    self?.scheduleRefresh(reason: "default device change", sawDefaultDeviceChange: true)
+                }
             }
         }
 
@@ -229,18 +240,37 @@ final class AudioPriorityModel: ObservableObject {
             SettingsWindowController.shared.show(model: self)
         }
     }
-    func scheduleRefresh(reason: String, delayMilliseconds: UInt64 = 250) {
+    func scheduleRefresh(
+        reason: String,
+        delayMilliseconds: UInt64 = 250,
+        sawDeviceListChange: Bool = false,
+        sawDefaultDeviceChange: Bool = false
+    ) {
+        pendingDeviceListChange = pendingDeviceListChange || sawDeviceListChange
+        pendingDefaultDeviceChange = pendingDefaultDeviceChange || sawDefaultDeviceChange
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             guard let self else { return }
             if delayMilliseconds > 0 {
                 try? await Task.sleep(nanoseconds: delayMilliseconds * 1_000_000)
             }
-            await self.refreshAndReconcile(reason: reason)
+            let deviceListChanged = self.pendingDeviceListChange
+            let defaultDeviceChanged = self.pendingDefaultDeviceChange
+            self.pendingDeviceListChange = false
+            self.pendingDefaultDeviceChange = false
+            await self.refreshAndReconcile(
+                reason: reason,
+                sawDeviceListChange: deviceListChanged,
+                sawDefaultDeviceChange: defaultDeviceChanged
+            )
         }
     }
 
-    private func refreshAndReconcile(reason: String) async {
+    private func refreshAndReconcile(
+        reason: String,
+        sawDeviceListChange: Bool,
+        sawDefaultDeviceChange: Bool
+    ) async {
         do {
             let snapshots = try await Task.detached(priority: .userInitiated) {
                 try AudioHardwareClient.captureSnapshot()
@@ -252,6 +282,11 @@ final class AudioPriorityModel: ObservableObject {
             settingsStore.mergeDiscoveredDevices(snapshots)
             lastUpdatedAt = .now
             lastError = nil
+
+            refreshManualOverrides(
+                allowAdoptingCurrentSelection: !sawDeviceListChange,
+                sawDefaultDeviceChange: sawDefaultDeviceChange
+            )
 
             try await reconcile(direction: .input)
             try await reconcile(direction: .output)
@@ -269,7 +304,7 @@ final class AudioPriorityModel: ObservableObject {
             return
         }
 
-        guard let targetUID = settingsStore.bestAvailableUID(for: direction, availableDevices: devices) else {
+        guard let targetUID = effectiveTargetUID(for: direction) else {
             return
         }
 
@@ -313,6 +348,7 @@ final class AudioPriorityModel: ObservableObject {
                 }.value
 
                 if verified {
+                    setLastAppliedUID(uid, for: direction)
                     return
                 }
 
@@ -323,5 +359,139 @@ final class AudioPriorityModel: ObservableObject {
         }
 
         throw lastFailure ?? AudioHardwareError.verificationFailed("Audio switch could not be completed.")
+    }
+
+    private func refreshManualOverrides(
+        allowAdoptingCurrentSelection: Bool,
+        sawDefaultDeviceChange: Bool
+    ) {
+        refreshManualOverride(for: .input, allowAdoptingCurrentSelection: allowAdoptingCurrentSelection || sawDefaultDeviceChange)
+        refreshManualOverride(for: .output, allowAdoptingCurrentSelection: allowAdoptingCurrentSelection || sawDefaultDeviceChange)
+    }
+
+    private func refreshManualOverride(for direction: AudioDirection, allowAdoptingCurrentSelection: Bool) {
+        guard let currentUID = currentUID(for: direction) else {
+            clearManualOverride(for: direction)
+            clearLastAppliedUID(for: direction)
+            return
+        }
+
+        if let manualUID = manualOverrideUID(for: direction), !isOverrideUsable(manualUID, direction: direction) {
+            clearManualOverride(for: direction)
+        }
+
+        if currentUID == lastAppliedUID(for: direction) {
+            clearLastAppliedUID(for: direction)
+            return
+        }
+
+        guard allowAdoptingCurrentSelection else {
+            return
+        }
+
+        guard isOverrideUsable(currentUID, direction: direction) else {
+            clearManualOverride(for: direction)
+            return
+        }
+
+        let bestUID = settingsStore.bestAvailableUID(for: direction, availableDevices: devices)
+        if currentUID == bestUID {
+            clearManualOverride(for: direction)
+            return
+        }
+
+        setManualOverrideUID(currentUID, for: direction)
+    }
+
+    private func effectiveTargetUID(for direction: AudioDirection) -> String? {
+        if let overrideUID = manualOverrideUID(for: direction), isOverrideUsable(overrideUID, direction: direction) {
+            return overrideUID
+        }
+        clearManualOverride(for: direction)
+        return settingsStore.bestAvailableUID(for: direction, availableDevices: devices)
+    }
+
+    private func currentUID(for direction: AudioDirection) -> String? {
+        switch direction {
+        case .input:
+            return currentInput?.uid
+        case .output:
+            return currentOutput?.uid ?? currentSystemOutput?.uid
+        }
+    }
+
+    private func isOverrideUsable(_ uid: String, direction: AudioDirection) -> Bool {
+        guard settingsStore.isDeviceEnabled(uid: uid, direction: direction) else {
+            return false
+        }
+
+        guard let device = devices.first(where: { $0.uid == uid }) else {
+            return false
+        }
+
+        guard device.isAlive else {
+            return false
+        }
+
+        switch direction {
+        case .input:
+            return device.supportsInput
+        case .output:
+            return device.supportsOutput
+        }
+    }
+
+    private func manualOverrideUID(for direction: AudioDirection) -> String? {
+        switch direction {
+        case .input:
+            return manualInputOverrideUID
+        case .output:
+            return manualOutputOverrideUID
+        }
+    }
+
+    private func setManualOverrideUID(_ uid: String, for direction: AudioDirection) {
+        switch direction {
+        case .input:
+            manualInputOverrideUID = uid
+        case .output:
+            manualOutputOverrideUID = uid
+        }
+    }
+
+    private func clearManualOverride(for direction: AudioDirection) {
+        switch direction {
+        case .input:
+            manualInputOverrideUID = nil
+        case .output:
+            manualOutputOverrideUID = nil
+        }
+    }
+
+    private func lastAppliedUID(for direction: AudioDirection) -> String? {
+        switch direction {
+        case .input:
+            return lastAppliedInputUID
+        case .output:
+            return lastAppliedOutputUID
+        }
+    }
+
+    private func setLastAppliedUID(_ uid: String, for direction: AudioDirection) {
+        switch direction {
+        case .input:
+            lastAppliedInputUID = uid
+        case .output:
+            lastAppliedOutputUID = uid
+        }
+    }
+
+    private func clearLastAppliedUID(for direction: AudioDirection) {
+        switch direction {
+        case .input:
+            lastAppliedInputUID = nil
+        case .output:
+            lastAppliedOutputUID = nil
+        }
     }
 }

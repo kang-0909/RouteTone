@@ -2,21 +2,26 @@ import CoreAudio
 import Foundation
 
 final class AudioHardwareMonitor {
+    enum ChangeKind {
+        case deviceList
+        case defaultDevice
+    }
+
     private let queue = DispatchQueue(label: "RouteTone.AudioHardwareMonitor")
     private var hasStarted = false
 
-    func start(onChange: @escaping () -> Void) {
+    func start(onChange: @escaping (ChangeKind) -> Void) {
         guard !hasStarted else { return }
         hasStarted = true
 
-        let selectors: [AudioObjectPropertySelector] = [
-            kAudioHardwarePropertyDevices,
-            kAudioHardwarePropertyDefaultInputDevice,
-            kAudioHardwarePropertyDefaultOutputDevice,
-            kAudioHardwarePropertyDefaultSystemOutputDevice
+        let selectors: [(AudioObjectPropertySelector, ChangeKind)] = [
+            (kAudioHardwarePropertyDevices, .deviceList),
+            (kAudioHardwarePropertyDefaultInputDevice, .defaultDevice),
+            (kAudioHardwarePropertyDefaultOutputDevice, .defaultDevice),
+            (kAudioHardwarePropertyDefaultSystemOutputDevice, .defaultDevice)
         ]
 
-        for selector in selectors {
+        for (selector, kind) in selectors {
             var address = AudioObjectPropertyAddress(
                 mSelector: selector,
                 mScope: kAudioObjectPropertyScopeGlobal,
@@ -27,7 +32,7 @@ final class AudioHardwareMonitor {
                 &address,
                 queue
             ) { _, _ in
-                onChange()
+                onChange(kind)
             }
         }
     }

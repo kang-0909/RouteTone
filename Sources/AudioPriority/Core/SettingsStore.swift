@@ -250,6 +250,10 @@ final class SettingsStore {
         }
     }
 
+    func isDeviceEnabled(uid: String, direction: AudioDirection) -> Bool {
+        priorityEntries(for: direction).first(where: { $0.deviceUID == uid })?.isEnabled ?? false
+    }
+
     private func priorityEntries(for direction: AudioDirection) -> [PriorityEntry] {
         switch direction {
         case .input:
