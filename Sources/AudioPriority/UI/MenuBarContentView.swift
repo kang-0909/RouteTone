@@ -239,14 +239,15 @@ private struct MenuPanelBackgroundModifier: ViewModifier {
             content.background {
                 ZStack {
                     PanelBackground(
-                        material: .hudWindow,
-                        alpha: 0.72
+                        material: .popover,
+                        alpha: 0.9
                     )
+                    Color.white.opacity(0.11)
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.045),
-                            Color.blue.opacity(0.018),
-                            Color.cyan.opacity(0.012)
+                            Color.white.opacity(0.11),
+                            Color.white.opacity(0.05),
+                            Color.blue.opacity(0.022)
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
@@ -262,7 +263,14 @@ private struct PanelCardBackgroundModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.17))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.11), lineWidth: 0.8)
+            )
     }
 }
 
